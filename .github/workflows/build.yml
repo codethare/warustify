@@ -1,8 +1,11 @@
 name: Build and Release
 on:
   push:
-    branches:
-      - master
+    branches: [ "main" ]
+    tags: [ "v0.0.1" ]
+  pull_request:
+    branches: [ "main" ]
+
 jobs:
   build:
     name: Create Release branch and Tag
