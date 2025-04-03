@@ -5,6 +5,6 @@ pub fn send_notification(summary: &str, body: &str) {
         .summary(summary)
         .body(body)
         .show() {
-        eprintln!("发送通知失败: {}", e);
+        eprintln!("Notification Fail: {}", e);
     }
 }
