@@ -1,11 +1,8 @@
 name: Build and Release
 on:
   push:
-    branches: [ "main" ]
-    tags: [ "v0.0.1" ]
-  pull_request:
-    branches: [ "main" ]
-
+    branches:
+      - master
 jobs:
   build:
     name: Create Release branch and Tag
@@ -14,15 +11,9 @@ jobs:
       tag: "v${{ steps.vars.outputs.pkg_version }}"
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
-      - name: Setup node
-        uses: actions/setup-node@v2-beta
-        with:
-          node-version: "12"
-      - name: npm install
-        uses: bahmutov/npm-install@v1
-      - name: Build package
-        run: npm run build
+        uses: actions/checkout@v4
+      - name: Build
+        run: cargo build --verbose --release
       - name: Get package version
         id: vars
         shell: bash
@@ -40,6 +31,17 @@ jobs:
           tag: "v${{ steps.vars.outputs.pkg_version }}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Provided by Github Actions
+      - name: Prepare Release Files
+        run: |
+          mkdir -p dist
+          cp target/release/warustatus dist/
+          cd dist
+          sha256sum warustatus > sha256sum.txt
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: dist/
   release:
     name: Create Release
     runs-on: ubuntu-latest
