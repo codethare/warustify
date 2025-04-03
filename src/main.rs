@@ -14,8 +14,8 @@ fn main() {
         let available_memory = get_available_memory();
         let threshold: u64 = 2 * 1024 * 1024 * 1024; // 2GB in bytes
         if available_memory < threshold {
-            let available_memory_mb = available_memory / (1024 * 1024);
-            send_notification("MEM !!!", &format!("MEM {}", available_memory_mb));
+            let available_memory_mb = available_memory / 1024 / 1024;
+            send_notification("MEM !!!", &format!("MEM {} MB", available_memory_mb));
         }
 
         // Check battery percentage
