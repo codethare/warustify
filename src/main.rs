@@ -1,38 +1,23 @@
-use std::time::Duration;
-use std::thread;
-use warustify::{get_battery_percentage, get_cpu_usage, get_available_memory, get_cpu_temperature, send_notification};
+mod monitor;
+mod notifier;
+mod events;
 
-fn main() {
-    loop {
-        // Check CPU usage
-        let cpu_usage = get_cpu_usage();
-        if cpu_usage > 90.0 {
-            send_notification("CPU !!!", &format!("CPU {}%", cpu_usage));
-        }
+use tokio::sync::mpsc;
+use events::Event;
 
-        // Check memory
-        let available_memory = get_available_memory();
-        let threshold: u64 = 2 * 1024 * 1024 * 1024; // 2GB in bytes
-        if available_memory > threshold {
-            let available_memory_mb = available_memory / 1024 / 1024;
-            send_notification("MEM !!!", &format!("MEM {} MB", available_memory_mb));
-        }
+#[tokio::main]
+async fn main() {
+    // 创建事件通道
+    let (tx, mut rx) = mpsc::channel::<Event>(32);
 
-        // Check battery percentage
-        if let Some(percentage) = get_battery_percentage() {
-            if percentage < 82.0 {
-                send_notification("BATTERY !!!", &format!("BATTERY {}%", percentage));
-            }
-        }
+    // 启动监控任务（该函数内部 spawn 了多个任务）
+    monitor::start_monitor(tx).await;
 
-        // Check CPU temperature
-        if let Some(temperature) = get_cpu_temperature() {
-            if temperature > 70.0 {
-                send_notification("CPU TEMP !!!", &format!("CPU TEMP {}°C", temperature));
-            }
-        }
+    println!("事件驱动的系统监控程序启动...");
 
-        // Sleep for 10 seconds before checking again
-        thread::sleep(Duration::from_secs(10));
+    // 主循环：接收事件并处理
+    while let Some(event) = rx.recv().await {
+        notifier::handle_event(event).await;
     }
 }
+
