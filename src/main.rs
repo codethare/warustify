@@ -1,169 +1,53 @@
-// main.rs
-use log::{error, info, warn};
 use notify_rust::Notification;
-use std::time::Duration; // <-- 移除 thread
-use sysinfo::CpuExt; // <-- 引入 SystemExt trait
-use sysinfo::{System, SystemExt}; // <-- 引入 SystemExt trait
-use zbus::{dbus_proxy, Connection, Result as ZbusResult}; // <-- 移除 Proxy
+use std::{fs, thread, time::Duration};
+use sysinfo::{CpuExt, System, SystemExt};
 
-// --- D-Bus 代理定義 ---
-#[dbus_proxy(
-    interface = "org.freedesktop.UPower",
-    default_service = "org.freedesktop.UPower",
-    default_path = "/org/freedesktop/UPower"
-)]
-trait UPower {
-    /// EnumerateDevices method
-    fn enumerate_devices(&self) -> ZbusResult<Vec<zbus::zvariant::OwnedObjectPath>>;
-}
-
-// 為 PowerDevice 代理明確指定不使用預設值
-#[dbus_proxy(
-    interface = "org.freedesktop.UPower.Device",
-    assume_defaults = false // <-- 告知宏我們不依賴預設 path/service
-)]
-trait PowerDevice {
-    /// Percentage property
-    #[dbus_proxy(property)]
-    fn percentage(&self) -> ZbusResult<f64>;
-
-    /// Type property
-    #[dbus_proxy(property)]
-    fn type_(&self) -> ZbusResult<u32>;
-
-    /// IsRechargeable property
-    #[dbus_proxy(property)]
-    fn is_rechargeable(&self) -> ZbusResult<bool>;
-}
-// --- D-Bus 代理定義結束 ---
-
-#[tokio::main]
-async fn main() {
-    env_logger::init();
-
-    let connection = match Connection::session().await {
-        Ok(conn) => conn,
-        Err(e) => {
-            error!("無法連接到 D-Bus Session Bus: {}", e);
-            return;
-        }
-    };
-    info!("成功連接到 D-Bus Session Bus");
-
-    // 現在 new_all() 和 refresh_all() 應該可以工作了
+fn main() {
     let mut sys = System::new_all();
-    info!("開始監控系統資源...");
 
     loop {
-        // refresh_all() 可能也來自 SystemExt，所以引入 trait 很重要
         sys.refresh_all();
 
-        // --- CPU 檢測 ---
-        // global_cpu_info() 也來自 SystemExt
+        // 检测 CPU 使用率，若使用率超过 80% 则发出通知
         let cpu_usage = sys.global_cpu_info().cpu_usage();
         if cpu_usage > 80.0 {
-            let msg = format!("CPU 使用率已達 {:.1}%", cpu_usage);
-            warn!("{}", msg);
-            notify("⚠️ CPU 使用率高", &msg);
+            notify("⚠ CPU使用率高", &format!("CPU使用率已达 {:.1}%", cpu_usage));
         }
 
-        // --- 記憶體檢測 ---
-        let available_mem_mb = sys.available_memory() / 1024 / 1024;
-        if available_mem_mb < 2048 {
-            let msg = format!("可用記憶體僅剩 {} MB", available_mem_mb);
-            warn!("{}", msg);
-            notify("⚠️ 記憶體不足", &msg);
+        // 检测可用内存，若少于 2048 MB 则发出通知
+        let mem_mb = sys.available_memory() / 1024;
+        if mem_mb < 2048 {
+            notify("⚠ 内存不足", &format!("可用内存仅剩 {} MB", mem_mb));
         }
 
-        // --- 電池檢測 (使用 D-Bus) ---
-        match get_battery_percentage_dbus(&connection).await {
-            Ok(Some(percentage)) => {
-                if percentage < 82.0 {
-                    let msg = format!("當前電量為 {:.1}%", percentage);
-                    warn!("{}", msg);
-                    notify("⚠️ 電池電量低", &msg);
-                }
-            }
-            Ok(None) => {
-                // info!("未偵測到電池設備。");
-            }
-            Err(e) => {
-                error!("查詢電池狀態時出錯: {}", e);
-                tokio::time::sleep(Duration::from_secs(60)).await;
+        // 检测电池电量，低于 82% 时发出通知
+        if let Some(battery) = read_battery_percentage() {
+            if battery < 82.0 {
+                notify("⚠ 电池电量低", &format!("当前电量为 {:.1}%", battery));
             }
         }
 
-        // 使用 Tokio 的異步 sleep
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        // 每 10 秒检测一次
+        thread::sleep(Duration::from_secs(10));
     }
 }
 
+/// 发送通知，同时输出日志到 stdout 以便 journald 收录
 fn notify(summary: &str, body: &str) {
-    if let Err(e) = Notification::new().summary(summary).body(body).show() {
-        error!("發送桌面通知失敗: {}", e);
-    }
+    println!("[通知] {} - {}", summary, body);
+    let _ = Notification::new().summary(summary).body(body).show();
 }
 
-async fn get_battery_percentage_dbus(connection: &Connection) -> ZbusResult<Option<f64>> {
-    let upower_proxy = UPowerProxy::new(connection).await?;
-    // info!("成功創建 UPower D-Bus 代理"); // 成功後無需每次都記錄
-
-    let devices = match upower_proxy.enumerate_devices().await {
-        Ok(d) => d,
+/// 尝试从系统文件中读取电池电量百分比  
+/// 此处假设电池设备为 /sys/class/power_supply/BAT0/capacity  
+fn read_battery_percentage() -> Option<f32> {
+    let capacity_file = "/sys/class/power_supply/BAT0/capacity";
+    match fs::read_to_string(capacity_file) {
+        Ok(content) => content.trim().parse::<f32>().ok(),
         Err(e) => {
-            error!("調用 UPower EnumerateDevices 失敗: {}", e);
-            return Err(e); // 直接返回錯誤
-        }
-    };
-    // info!("獲取到 {} 個電源設備", devices.len());
-
-    for device_path in devices {
-        // 為每個設備創建代理，這裡需要處理路徑無效的可能性
-        let device_proxy = match PowerDeviceProxy::builder(connection)
-            .path(&device_path)? // 傳入設備路徑引用
-            .build()
-            .await
-        {
-            Ok(p) => p,
-            Err(e) => {
-                warn!("為路徑 {:?} 創建設備代理失敗: {}", device_path, e);
-                continue; // 跳過這個設備
-            }
-        };
-
-        // 獲取屬性時也需要處理錯誤
-        let device_type = match device_proxy.type_().await {
-            Ok(t) => t,
-            Err(e) => {
-                warn!("無法獲取設備 {:?} 的類型: {}", device_proxy.path(), e);
-                continue;
-            }
-        };
-        let is_rechargeable = match device_proxy.is_rechargeable().await {
-            Ok(r) => r,
-            Err(e) => {
-                warn!("無法獲取設備 {:?} 的可充電狀態: {}", device_proxy.path(), e);
-                continue;
-            }
-        };
-
-        if device_type == 2 && is_rechargeable {
-            // 2 代表電池
-            // info!("找到電池設備: {:?}", device_proxy.path());
-            return match device_proxy.percentage().await {
-                Ok(p) => {
-                    // info!("獲取到電池百分比: {:.1}%", p);
-                    Ok(Some(p))
-                }
-                Err(e) => {
-                    error!("無法獲取電池 {:?} 的百分比: {}", device_proxy.path(), e);
-                    Err(e) // 將錯誤向上傳播
-                }
-            };
+            eprintln!("读取电池信息失败: {}", e);
+            None
         }
     }
-
-    // info!("未找到可充電電池設備"); // 找不到時不一定是警告，可能就是沒有
-    Ok(None)
 }
 
