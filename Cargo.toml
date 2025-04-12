@@ -4,6 +4,9 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1", features = ["full"] }
-notify-rust = "4"         # 用于发送桌面通知
-sysinfo = "0.23"        # 用于获取 CPU、内存、温度信息 (请使用最新版本)
+sysinfo = "0.29" 
+notify-rust = "4" 
+zbus = "3"      
+log = "0.4"      
+env_logger = "0.10" 
+tokio = { version = "1", features = ["full"] } 
